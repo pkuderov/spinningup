@@ -81,28 +81,28 @@ class VanillaPolicyGradientRL:
                 print('loss:', loss_)
 
             input()
-    #
-    # def _train_one_epoch(self, env, epoch, render=True):
-    #     observation = env.reset()
-    #     done = False
-    #     actions = []
-    #     rewards = []
-    #
-    #     while True:
-    #         env.render()
-    #         print(observation)
-    #
-    #         # act in the environment
-    #         act = np.random.randint(0, 2)
-    #         observation, reward, done, _ = env.step(act)
-    #
-    #         actions.append(act)
-    #         rewards.append(reward)
-    #
-    #         if done or len(rewards) > 100:
-    #             print(actions)
-    #             print(rewards)
-    #             break
+
+    def _train_one_epoch(self, env, batch_size, max_total_steps, render=True):
+        observation = env.reset()
+        done = False
+        actions = []
+        rewards = []
+
+        while True:
+            env.render()
+            print(observation)
+
+            # act in the environment
+            act = np.random.randint(0, 2)
+            observation, reward, done, _ = env.step(act)
+
+            actions.append(act)
+            rewards.append(reward)
+
+            if done or len(rewards) > 100:
+                print(actions)
+                print(rewards)
+                break
 
 
 if __name__ == '__main__':
