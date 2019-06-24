@@ -42,6 +42,7 @@ def train(
     act_ph = tf.placeholder(shape=(None, ), dtype=tf.int32)
     action_masks = tf.one_hot(act_ph, n_acts)
     log_probs = tf.reduce_sum(action_masks * tf.nn.log_softmax(logits), axis=1)
+    print(log_probs.shape)
     loss = -tf.reduce_mean(weights_ph * log_probs)
 
     # make train op
@@ -129,7 +130,8 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--env_name', '--env', type=str, default='CartPole-v0')
     parser.add_argument('--render', action='store_true')
+    parser.add_argument('--epochs', type=int, default=10)
     parser.add_argument('--lr', type=float, default=1e-2)
     args = parser.parse_args()
     print('\nUsing simplest formulation of policy gradient.\n')
-    train(env_name=args.env_name, render=args.render, lr=args.lr)
+    train(env_name=args.env_name, render=args.render, lr=args.lr, epochs=args.epochs)
