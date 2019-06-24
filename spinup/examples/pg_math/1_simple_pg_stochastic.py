@@ -33,27 +33,21 @@ class VanillaPolicyGradientRL:
     class _Model:
         def __init__(
                 self, observation_shape: Tuple[int, ...], n_actions: int,
+                hidden_layers: Tuple[int, ...],
                 learning_rate: float = 1e-2, stochasticity: float = .1
         ):
             self._n_actions = n_actions
             self._stochasticity = stochasticity
 
             observation = Input(shape=observation_shape, dtype=tf.float32)
-            hidden_layer = Dense(32, activation=tf.tanh)(observation)
-            logits = Dense(n_actions, activation=None)(hidden_layer)
-
-            actions = tf.squeeze(tf.multinomial(logits=logits, num_samples=1), axis=1)
+            x = observation
+            for hidden_layer in hidden_layers:
+                x = Dense(hidden_layer, activation=tf.nn.relu)(x)
+            logits = Dense(n_actions)(x)
+            actions = tf.squeeze(tf.random.categorical(logits=logits, num_samples=1), axis=1)
 
             rewards_phi = tf.placeholder(shape=(None,), dtype=tf.float32)
             actions_phi = tf.placeholder(shape=(None,), dtype=tf.int32)
-
-            # probs = tf.nn.log_softmax(logits)
-            # action_indices = tf.stack(
-            #     [tf.range(tf.shape(actions_phi)[0]), actions_phi],
-            #     axis=-1
-            # )
-            # likelihood = tf.gather_nd(probs, action_indices)
-
             actions_mask = tf.one_hot(actions_phi, n_actions)
             log_probs = tf.nn.log_softmax(logits)
             likelihood = tf.reduce_sum(actions_mask * log_probs, axis=1)
@@ -98,11 +92,9 @@ class VanillaPolicyGradientRL:
                 self._observation: observations.reshape(1, -1)
             })
             action = actions_batch[0]
-            # if action >= self._n_actions:
-            #     print(action)
-            #     action = np.random.randint(self._n_actions)
-            # if np.random.rand() < self._stochasticity:
-            #     action = self._sample_another_action(action)
+            if np.random.rand() < self._stochasticity:
+                # action = self._sample_another_action(action)
+                action = np.random.randint(self._n_actions)
             return action
 
         def _sample_another_action(self, action):
@@ -113,17 +105,24 @@ class VanillaPolicyGradientRL:
         self.env_name = env_name
         self.debug = debug
 
-    def run_train(self, hidden_layers: Tuple[int], epochs: int, learning_rate: float, render: bool) -> None:
+    def run_train(self,
+            hidden_layers: Tuple[int], epochs: int,
+            epoch_episodes: int, epoch_steps: int,
+            learning_rate: float, render: bool
+    ) -> None:
         with managed_gym_environment(self.env_name, self.debug) as env:
             observation_shape = env.observation_space.shape
             n_actions = env.action_space.n
 
             model = self._Model(
-                observation_shape, n_actions, learning_rate=learning_rate, stochasticity=.0
+                observation_shape, n_actions,
+                hidden_layers=hidden_layers,
+                learning_rate=learning_rate,
+                stochasticity=.99
             )
             for epoch in range(epochs):
                 observations, actions, rewards, episode_scores, episode_lengths = self._get_one_epoch_samples(
-                    env, model, n_episodes=1000, max_total_steps=5000,
+                    env, model, n_episodes=epoch_episodes, max_total_steps=epoch_steps,
                     render=render
                 )
 
@@ -137,6 +136,8 @@ class VanillaPolicyGradientRL:
                     rewards=rewards
                 )
                 dt = 1e7 * (timer() - t) / observations.shape[0]
+
+                model._stochasticity *= .0
 
                 mean_score = episode_scores.mean()
                 mean_length = episode_lengths.mean()
@@ -203,6 +204,8 @@ if __name__ == '__main__':
     parser.add_argument('--env_name', '--env', type=str, default='CartPole-v0')
     parser.add_argument('--debug', action='store_true')
     parser.add_argument('--epochs', type=int, default=10)
+    parser.add_argument('--epoch_episodes', type=int, default=100)
+    parser.add_argument('--epoch_steps', type=int, default=1000)
     parser.add_argument('--lr', type=float, default=1e-2)
     parser.add_argument('--render', action='store_true')
     args = parser.parse_args()
@@ -214,6 +217,8 @@ if __name__ == '__main__':
     VanillaPolicyGradientRL(args.env_name, debug=debug).run_train(
         hidden_layers=(32,),
         epochs=args.epochs,
+        epoch_episodes=args.epoch_episodes,
+        epoch_steps=args.epoch_steps,
         learning_rate=args.lr,
         render=args.render
     )
