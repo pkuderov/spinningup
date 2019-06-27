@@ -9,6 +9,8 @@ from gym.spaces import Discrete, Box
 from tensorflow.python.keras import Input
 from tensorflow.python.keras.layers import Dense
 
+from spinup.utils.clr import cyclic_learning_rate as clr
+
 
 @contextmanager
 def managed_gym_environment(env_name: str, debug: bool):
@@ -53,10 +55,26 @@ class VanillaPolicyGradientRL:
             likelihood = tf.reduce_sum(actions_mask * log_probs, axis=1)
             loss = -tf.reduce_mean(rewards_phi * likelihood)
 
-            train_op = tf.train.AdamOptimizer(learning_rate=learning_rate).minimize(loss)
+            global_step = tf.Variable(0, trainable=False)
+            lr_callback = clr(
+                global_step=global_step,
+                learning_rate=learning_rate,
+                max_lr=learning_rate * 100,
+                step_size=8,
+                learning_rate_decay=.5,
+                max_lr_decay=.7,
+                mode='exp_rate'
+            )
+            train_op = tf.train.AdamOptimizer(
+                learning_rate=lr_callback
+            ).minimize(
+                loss, global_step=global_step
+            )
 
             self._session = tf.InteractiveSession()
             self._session.run(tf.global_variables_initializer())
+
+            self._global_step = global_step
 
             self._observation = observation
             self._actions = actions
@@ -101,6 +119,69 @@ class VanillaPolicyGradientRL:
             a = np.random.randint(self._n_actions - 1)
             return a if a < action else a + 1
 
+    class _Sampler:
+        def __init__(self, env, n_episodes, max_total_steps, render: bool = True):
+            self._env = env
+            self._n_episodes = n_episodes
+            self._max_total_steps = max_total_steps
+            self._render = render
+
+            self._actions = np.empty(shape=(max_total_steps,), dtype=np.int32)
+            self._rewards = np.empty(shape=(max_total_steps,), dtype=np.float32)
+            self._current_rewards = np.empty(shape=(max_total_steps,), dtype=np.float32)
+            self._episode_scores = np.empty(shape=(n_episodes,), dtype=np.float32)
+            self._episode_lengths = np.empty(shape=(n_episodes,), dtype=np.int32)
+
+            observation = self._env.reset()
+            observations_shape = (max_total_steps,) + observation.shape
+            self._observations = np.empty(shape=observations_shape, dtype=np.float32)
+
+        def get_one_epoch_samples(self, model: 'VanillaPolicyGradientRL._Model'):
+            step, episode, done, ep_step = 0, 0, False, 0
+            observation = self._env.reset()
+
+            while step < self._max_total_steps and episode < self._n_episodes:
+                if episode == 0 and self._render:
+                    self._env.render()
+
+                self._observations[step] = observation.copy()
+
+                action = model.predict_action(observation)
+                self._actions[step] = action
+
+                observation, reward, done, _ = self._env.step(action)
+                self._current_rewards[ep_step] = reward
+
+                ep_step += 1
+                step += 1
+                if done:
+                    observation = self._env.reset()
+                    score = self._current_rewards[:ep_step].sum()
+                    self._rewards[(step - ep_step):step] = self._reward_to_go(
+                        self._current_rewards[:ep_step]
+                    )
+                    self._episode_scores[episode] = score
+                    self._episode_lengths[episode] = ep_step
+
+                    episode += 1
+                    ep_step = 0
+                    if (
+                            step > .95 * self._max_total_steps
+                            or step + ep_step > .99 * self._max_total_steps
+                    ):
+                        break
+
+            observations = self._observations[:step - ep_step]
+            actions = self._actions[:step - ep_step]
+            rewards = self._rewards[:step - ep_step]
+            episode_scores = self._episode_scores[:episode]
+            episode_lengths = self._episode_lengths[:episode]
+
+            return observations, actions, rewards, episode_scores, episode_lengths
+
+        def _reward_to_go(self, rewards):
+            return np.cumsum(rewards[::-1])[::-1]
+
     def __init__(self, env_name: str, debug: bool = False):
         self.env_name = env_name
         self.debug = debug
@@ -118,12 +199,17 @@ class VanillaPolicyGradientRL:
                 observation_shape, n_actions,
                 hidden_layers=hidden_layers,
                 learning_rate=learning_rate,
-                stochasticity=.99
+                stochasticity=.0
+            )
+            sampler = self._Sampler(
+                env=env,
+                n_episodes=epoch_episodes,
+                max_total_steps=epoch_steps,
+                render=render
             )
             for epoch in range(epochs):
-                observations, actions, rewards, episode_scores, episode_lengths = self._get_one_epoch_samples(
-                    env, model, n_episodes=epoch_episodes, max_total_steps=epoch_steps,
-                    render=render
+                observations, actions, rewards, episode_scores, episode_lengths = sampler.get_one_epoch_samples(
+                    model
                 )
 
                 if episode_scores.shape[0] == 0:
@@ -147,57 +233,6 @@ class VanillaPolicyGradientRL:
 
             if render:
                 input()
-
-    def _get_one_epoch_samples(
-            self, env, model: 'VanillaPolicyGradientRL._Model',
-            n_episodes: int, max_total_steps: int,
-            render: bool = True
-    ):
-        actions = np.ones(shape=(max_total_steps,), dtype=np.int32)
-        rewards = np.ones(shape=(max_total_steps,), dtype=np.float32)
-        current_rewards = np.ones(shape=(max_total_steps,), dtype=np.float32)
-        episode_scores = np.ones(shape=(n_episodes,), dtype=np.float32)
-        episode_lengths = np.ones(shape=(n_episodes,), dtype=np.int32)
-
-        step, episode, done, ep_step = 0, 0, False, 0
-        observation = env.reset()
-        observations_shape = (max_total_steps,) + observation.shape
-        observations = np.ones(shape=observations_shape, dtype=np.float32)
-
-        while step < max_total_steps and episode < n_episodes:
-            if episode == 0 and render:
-                env.render()
-
-            observations[step] = observation.copy()
-
-            action = model.predict_action(observation)
-            actions[step] = action
-
-            observation, reward, done, _ = env.step(action)
-            current_rewards[ep_step] = reward
-
-            ep_step += 1
-            step += 1
-            if done:
-                observation = env.reset()
-                score = current_rewards[:ep_step].sum()
-                rewards[(step - ep_step):step] = self._reward_to_go(current_rewards[:ep_step])
-                episode_scores[episode] = score
-                episode_lengths[episode] = ep_step
-
-                episode += 1
-                ep_step = 0
-
-        observations = observations[:step-ep_step]
-        actions = actions[:step-ep_step]
-        rewards = rewards[:step-ep_step]
-        episode_scores = episode_scores[:episode]
-        episode_lengths = episode_lengths[:episode]
-
-        return observations, actions, rewards, episode_scores, episode_lengths
-
-    def _reward_to_go(self, rewards):
-        return np.cumsum(rewards[::-1])[::-1]
 
 
 if __name__ == '__main__':
