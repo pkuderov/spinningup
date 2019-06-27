@@ -208,9 +208,7 @@ class VanillaPolicyGradientRL:
                 render=render
             )
             for epoch in range(epochs):
-                observations, actions, rewards, episode_scores, episode_lengths = sampler.get_one_epoch_samples(
-                    model
-                )
+                observations, actions, rewards, episode_scores, episode_lengths = sampler.get_one_epoch_samples(model)
 
                 if episode_scores.shape[0] == 0:
                     continue
