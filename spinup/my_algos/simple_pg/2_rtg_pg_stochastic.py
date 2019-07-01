@@ -58,10 +58,9 @@ class VanillaPolicyGradientRL:
             global_step = tf.Variable(0, trainable=False)
             lr_callback = clr(
                 global_step=global_step,
-                learning_rate=learning_rate,
-                max_lr=learning_rate * 100,
                 step_size=8,
-                learning_rate_decay=.5,
+                learning_rate=(learning_rate, learning_rate * 50),
+                const_lr_decay=.5,
                 max_lr_decay=.7,
                 mode='exp_rate'
             )

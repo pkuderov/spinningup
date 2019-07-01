@@ -1,3 +1,5 @@
+from typing import Tuple
+
 import tensorflow as tf
 from tensorflow.python.framework import ops
 from tensorflow.python.ops import math_ops
@@ -6,11 +8,10 @@ from tensorflow.python.eager import context
 
 def cyclic_learning_rate(
         global_step,
-        learning_rate=0.01,
-        max_lr=0.1,
-        step_size=20.,
-        learning_rate_decay=.9,
-        max_lr_decay=0.99994,
+        step_size: int,
+        learning_rate: Tuple[float, float],
+        const_lr_decay=.5,
+        max_lr_decay=.7,
         mode='triangular',
         name=None
 ):
@@ -63,7 +64,7 @@ def cyclic_learning_rate(
          Args:
           global_step: A scalar `int32` or `int64` `Tensor` or a Python number.
             Global step to use for the cyclic computation.  Must not be negative.
-          learning_rate: A scalar `float32` or `float64` `Tensor` or a
+          min_lr: A scalar `float32` or `float64` `Tensor` or a
           Python number.  The initial learning rate which is the lower bound
             of the cycle (default = 0.1).
           max_lr:  A scalar. The maximum learning rate boundary.
@@ -90,21 +91,21 @@ def cyclic_learning_rate(
     """
     if global_step is None:
         raise ValueError("global_step is required for cyclic_learning_rate.")
-    with ops.name_scope(name, "CyclicLearningRate",
-            [learning_rate, global_step]) as name:
-        learning_rate = ops.convert_to_tensor(learning_rate, name="learning_rate")
-        dtype = learning_rate.dtype
-        global_step = math_ops.cast(global_step, dtype)
-        step_size = math_ops.cast(step_size, dtype)
+
+    min_lr, max_lr = learning_rate
+    with ops.name_scope(name, "CyclicLearningRate", [global_step]) as name:
+        step_size = float(step_size)
+        global_step = tf.cast(global_step, tf.float32)
 
         def cyclic_lr():
             """Helper to recompute learning rate; most helpful in eager-mode."""
             # computing: cycle = floor( 1 + global_step / ( 2 * step_size ) )
-            double_step = math_ops.add(step_size, step_size)
+            double_step = math_ops.multiply(2., step_size)
             global_div_double_step = math_ops.divide(global_step, double_step)
-            cycle = math_ops.floor(math_ops.add(1., global_div_double_step))
+            cycle_from_zero = math_ops.floor(global_div_double_step)
+            cycle = math_ops.add(1., cycle_from_zero)
             # computing: x = abs( global_step / step_size – 2 * cycle + 1 )
-            double_cycle = math_ops.add(cycle, cycle)
+            double_cycle = math_ops.multiply(2., cycle)
             global_div_step = math_ops.divide(global_step, step_size)
             tmp = math_ops.subtract(global_div_step, double_cycle)
             x = math_ops.abs(math_ops.add(1., tmp))
@@ -114,24 +115,29 @@ def cyclic_learning_rate(
             # a2 = math_ops.subtract(max_lr, learning_rate)
             # clr = math_ops.multiply(a1, a2)
 
-            # cur_lr = learning_rate + (max_lr - learning_rate) * learning_rate_decay ** cycle
-            lr_decay = math_ops.pow(learning_rate_decay, cycle)
-            cur_lr_diff = math_ops.multiply(
-                math_ops.subtract(max_lr, learning_rate),
-                lr_decay
+            # compute const part
+            # const_lr = min_rl + (max_lr - min_lr) * const_lr_decay ** cycle
+            const_lr_diff = math_ops.multiply(
+                math_ops.subtract(max_lr, min_lr),
+                math_ops.pow(const_lr_decay, cycle)
             )
-            cur_lr = math_ops.add(learning_rate, cur_lr_diff)
+            const_lr = math_ops.add(min_lr, const_lr_diff)
 
-            # computing: clr = cur_lr + (max_lr – cur_lr) * max(0, 1 - x)
-            a1 = math_ops.maximum(0., math_ops.subtract(1., x))
-            a2 = math_ops.subtract(max_lr, cur_lr)
-            clr = math_ops.multiply(a1, a2)
-            if mode == 'triangular2':
-                clr = math_ops.divide(clr, math_ops.cast(math_ops.pow(2, math_ops.cast(
-                    cycle - 1, tf.int32)), tf.float32))
-            if mode == 'exp_range':
-                clr = math_ops.multiply(math_ops.pow(max_lr_decay, cycle), clr)
-            return math_ops.add(clr, cur_lr, name=name)
+            # compute dynamic part
+            # dyn_lr = (max_lr – cur_lr) * max(0, 1 - x)
+            dyn_lr = math_ops.multiply(
+                math_ops.subtract(max_lr, const_lr),
+                math_ops.maximum(0., math_ops.subtract(1., x))
+            )
+
+            # optionally shrink dynamic part
+            if mode == 'exp_rate':
+                decay_alpha = math_ops.pow(max_lr_decay, cycle_from_zero)
+                dyn_lr = math_ops.multiply(dyn_lr, decay_alpha)
+
+            # compute learning rate
+            # learning_rate = const_lr + dyn_lr
+            return math_ops.add(const_lr, dyn_lr, name=name)
 
         if not context.executing_eagerly():
             cyclic_lr = cyclic_lr()
