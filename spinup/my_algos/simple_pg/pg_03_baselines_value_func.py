@@ -10,25 +10,8 @@ from tensorflow.python.keras import Input
 from tensorflow.python.keras.layers import Dense
 
 from spinup.utils.clr import cyclic_learning_rate as clr
-
-
-@contextmanager
-def managed_gym_environment(env_name: str, debug: bool):
-    env = gym.make(env_name)
-    if debug:
-        print('===> Env')
-
-    assert isinstance(env.observation_space, Box), \
-        "This example only works for envs with continuous state spaces."
-    assert isinstance(env.action_space, Discrete), \
-        "This example only works for envs with discrete action spaces."
-
-    try:
-        yield env
-    finally:
-        env.close()
-        if debug:
-            print('<=== Env')
+from spinup.utils.experiment import ExperimentResult, ExperimentInfo, EpochResult
+from spinup.utils.my_utils import managed_gym_environment
 
 
 class VanillaPolicyGradientRL:
@@ -40,6 +23,9 @@ class VanillaPolicyGradientRL:
         ):
             self._n_actions = n_actions
             self._stochasticity = stochasticity
+
+            # reset default graph
+            tf.reset_default_graph()
 
             # Policy approximate
             self._observation = Input(shape=observation_shape, dtype=tf.float32)
@@ -165,6 +151,9 @@ class VanillaPolicyGradientRL:
                 action = np.random.randint(self._n_actions)
             return action
 
+        def close_sessions(self):
+            self._session.close()
+
         def _sample_another_action(self, action):
             a = np.random.randint(self._n_actions - 1)
             return a if a < action else a + 1
@@ -240,11 +229,14 @@ class VanillaPolicyGradientRL:
             self,
             hidden_layers: Tuple[int], epochs: int,
             epoch_episodes: int, epoch_steps: int,
-            learning_rate: float, render: bool
-    ) -> None:
+            learning_rate: float, render: bool, print_scores: bool
+    ) -> ExperimentResult:
         with managed_gym_environment(self.env_name, self.debug) as env:
             observation_shape = env.observation_space.shape
             n_actions = env.action_space.n
+
+            experiment_info = ExperimentInfo(env=self.env_name, epochs=epochs, hidden_layers=hidden_layers)
+            experiment_result = ExperimentResult(experiment_info)
 
             model = self._Model(
                 observation_shape, n_actions,
@@ -276,12 +268,19 @@ class VanillaPolicyGradientRL:
 
                 mean_score = episode_scores.mean()
                 mean_length = episode_lengths.mean()
-                print('[{0}]: loss: {1:.3f}  sc: {2:.3f}  len: {3:.3f}  t: {4:.4f}  lr:{5:.4f}  vfl: {6:.3f}'.format(
-                    epoch, loss, mean_score, mean_length, dt, lr, vf_loss
-                ))
 
+                if print_scores:
+                    print('[{0}]: loss: {1:.3f}  sc: {2:.3f}  len: {3:.3f}  t: {4:.4f}  lr:{5:.4f}  vfl: {6:.3f}'.format(
+                        epoch, loss, mean_score, mean_length, dt, lr, vf_loss
+                    ))
+
+                epoch_result = EpochResult(epoch=epoch, loss=loss, score=mean_score)
+                experiment_result.epochs.append(epoch_result)
+
+            model.close_sessions()
             if render:
                 input()
+            return experiment_result
 
 
 if __name__ == '__main__':
@@ -295,17 +294,19 @@ if __name__ == '__main__':
     parser.add_argument('--epoch_steps', type=int, default=1000)
     parser.add_argument('--lr', type=float, default=1e-2)
     parser.add_argument('--render', action='store_true')
+    parser.add_argument('--no-print', action='store_true')
     args = parser.parse_args()
 
     debug = args.debug
     if not debug:
         print('\nUsing simplest formulation of policy gradient.\n')
 
-    VanillaPolicyGradientRL(args.env_name, debug=debug).run_train(
+    result = VanillaPolicyGradientRL(args.env_name, debug=debug).run_train(
         hidden_layers=(32,),
         epochs=args.epochs,
         epoch_episodes=args.epoch_episodes,
         epoch_steps=args.epoch_steps,
         learning_rate=args.lr,
-        render=args.render
+        render=args.render,
+        print_scores=not args.no_print
     )

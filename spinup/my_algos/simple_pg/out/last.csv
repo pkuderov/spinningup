@@ -1,0 +1,11 @@
+;epoch;experiment;loss;score
+0;0;ExperimentInfo(env='CartPole-v0', epochs=10, hidden_layers=(32,));7.549382209777832;19.75
+1;1;ExperimentInfo(env='CartPole-v0', epochs=10, hidden_layers=(32,));7.0506815910339355;23.875
+2;2;ExperimentInfo(env='CartPole-v0', epochs=10, hidden_layers=(32,));11.774858474731445;33.625
+3;3;ExperimentInfo(env='CartPole-v0', epochs=10, hidden_layers=(32,));9.543344497680664;38.125
+4;4;ExperimentInfo(env='CartPole-v0', epochs=10, hidden_layers=(32,));14.239909172058105;51.25
+5;5;ExperimentInfo(env='CartPole-v0', epochs=10, hidden_layers=(32,));4.859140396118164;46.625
+6;6;ExperimentInfo(env='CartPole-v0', epochs=10, hidden_layers=(32,));10.557581901550293;73.5
+7;7;ExperimentInfo(env='CartPole-v0', epochs=10, hidden_layers=(32,));11.063090324401855;99.625
+8;8;ExperimentInfo(env='CartPole-v0', epochs=10, hidden_layers=(32,));7.505600452423096;114.625
+9;9;ExperimentInfo(env='CartPole-v0', epochs=10, hidden_layers=(32,));5.790825366973877;148.625

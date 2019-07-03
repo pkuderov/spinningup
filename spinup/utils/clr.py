@@ -12,7 +12,6 @@ def cyclic_learning_rate(
         learning_rate: Tuple[float, float],
         const_lr_decay=.5,
         max_lr_decay=.7,
-        mode='triangular',
         name=None
 ):
     """Applies cyclic learning rate (CLR).
@@ -35,23 +34,15 @@ def cyclic_learning_rate(
           ( max_lr – learning_rate ) * max( 0 , 1 - x )
          ```
         Polices:
-          'triangular':
-            Default, linearly increasing then linearly decreasing the
-            learning rate at each cycle.
-           'triangular2':
-            The same as the triangular policy except the learning
-            rate difference is cut in half at the end of each cycle.
-            This means the learning rate difference drops after each cycle.
-           'exp_range':
             The learning rate varies between the minimum and maximum
             boundaries and each boundary value declines by an exponential
             factor of: gamma^global_step.
-         Example: 'triangular2' mode cyclic learning rate.
+         Example:
           '''python
           ...
           global_step = tf.Variable(0, trainable=False)
           optimizer = tf.train.AdamOptimizer(learning_rate=
-            clr.cyclic_learning_rate(global_step=global_step, mode='triangular2'))
+            clr.cyclic_learning_rate(global_step=global_step, step_size=8))
           train_op = optimizer.minimize(loss_op, global_step=global_step)
           ...
            with tf.Session() as sess:
@@ -64,17 +55,17 @@ def cyclic_learning_rate(
          Args:
           global_step: A scalar `int32` or `int64` `Tensor` or a Python number.
             Global step to use for the cyclic computation.  Must not be negative.
-          min_lr: A scalar `float32` or `float64` `Tensor` or a
-          Python number.  The initial learning rate which is the lower bound
-            of the cycle (default = 0.1).
-          max_lr:  A scalar. The maximum learning rate boundary.
           step_size: A scalar. The number of iterations in half a cycle.
             The paper suggests step_size = 2-8 x training iterations in epoch.
-          gamma: constant in 'exp_range' mode:
-            gamma**(global_step)
-          mode: one of {triangular, triangular2, exp_range}.
-              Default 'triangular'.
-              Values correspond to policies detailed above.
+          learning_rate: A tuple of two scalars (min_lr, max_lr), where every scalar is `float32` or
+          `float64` `Tensor` or a Python number.
+            min_lr: The initial learning rate which is the lower bound of the cycle. Never changes.
+                Actual learning rate tends to it.
+            max_lr: The maximum learning rate boundary.
+          const_lr_decay: float constant. Defines the base for the decay, const_lr_decay ** cycle,
+            which's applied to (max_lr - min_lr) and defines the const part of learning rate during the cycle.
+          max_lr_decay: float constant. Defines the base for the decay of learning rate' dynamic part,
+            max_lr_decay ** cycle.
           name: String.  Optional name of the operation.  Defaults to
             'CyclicLearningRate'.
          Returns:
@@ -110,12 +101,7 @@ def cyclic_learning_rate(
             tmp = math_ops.subtract(global_div_step, double_cycle)
             x = math_ops.abs(math_ops.add(1., tmp))
 
-            # # computing: clr = learning_rate + ( max_lr – learning_rate ) * max( 0, 1 - x )
-            # a1 = math_ops.maximum(0., math_ops.subtract(1., x))
-            # a2 = math_ops.subtract(max_lr, learning_rate)
-            # clr = math_ops.multiply(a1, a2)
-
-            # compute const part
+            # compute const part with decay
             # const_lr = min_rl + (max_lr - min_lr) * const_lr_decay ** cycle
             const_lr_diff = math_ops.multiply(
                 math_ops.subtract(max_lr, min_lr),
@@ -123,17 +109,13 @@ def cyclic_learning_rate(
             )
             const_lr = math_ops.add(min_lr, const_lr_diff)
 
-            # compute dynamic part
-            # dyn_lr = (max_lr – cur_lr) * max(0, 1 - x)
+            # compute dynamic part with decay
             dyn_lr = math_ops.multiply(
                 math_ops.subtract(max_lr, const_lr),
                 math_ops.maximum(0., math_ops.subtract(1., x))
             )
-
-            # optionally shrink dynamic part
-            if mode == 'exp_rate':
-                decay_alpha = math_ops.pow(max_lr_decay, cycle_from_zero)
-                dyn_lr = math_ops.multiply(dyn_lr, decay_alpha)
+            dynamic_decay = math_ops.pow(max_lr_decay, cycle_from_zero)
+            dyn_lr = math_ops.multiply(dyn_lr, dynamic_decay)
 
             # compute learning rate
             # learning_rate = const_lr + dyn_lr
