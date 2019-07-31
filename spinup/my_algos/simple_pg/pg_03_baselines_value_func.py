@@ -102,8 +102,7 @@ class VanillaPolicyGradientRL:
                 step_size=10,
                 learning_rate=(learning_rate, learning_rate * 50),
                 const_lr_decay=.5,
-                max_lr_decay=.7,
-                mode='exp_rate'
+                max_lr_decay=.7
             )
             train_op = tf.train.AdamOptimizer(
                 learning_rate=lr
@@ -292,7 +291,7 @@ if __name__ == '__main__':
     parser.add_argument('--epochs', type=int, default=10)
     parser.add_argument('--epoch_episodes', type=int, default=100)
     parser.add_argument('--epoch_steps', type=int, default=1000)
-    parser.add_argument('--lr', type=float, default=1e-2)
+    parser.add_argument('--lr', type=float, default=1e-3)
     parser.add_argument('--render', action='store_true')
     parser.add_argument('--no-print', action='store_true')
     args = parser.parse_args()

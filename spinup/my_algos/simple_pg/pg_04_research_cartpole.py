@@ -1,34 +1,13 @@
-from contextlib import contextmanager
 from timeit import default_timer as timer
 from typing import Tuple
 
-import gym
 import numpy as np
 import tensorflow as tf
-from gym.spaces import Discrete, Box
 from tensorflow.python.keras import Input
 from tensorflow.python.keras.layers import Dense
 
 from spinup.utils.clr import cyclic_learning_rate as clr
-
-
-@contextmanager
-def managed_gym_environment(env_name: str, debug: bool):
-    env = gym.make(env_name)
-    if debug:
-        print('===> Env')
-
-    assert isinstance(env.observation_space, Box), \
-        "This example only works for envs with continuous state spaces."
-    assert isinstance(env.action_space, Discrete), \
-        "This example only works for envs with discrete action spaces."
-
-    try:
-        yield env
-    finally:
-        env.close()
-        if debug:
-            print('<=== Env')
+from spinup.utils.my_utils import managed_gym_environment
 
 
 class VanillaPolicyGradientRL:
@@ -40,6 +19,9 @@ class VanillaPolicyGradientRL:
         ):
             self._n_actions = n_actions
             self._stochasticity = stochasticity
+
+            # reset default graph
+            tf.reset_default_graph()
 
             # Policy approximate
             self._observation = Input(shape=observation_shape, dtype=tf.float32)
@@ -116,8 +98,7 @@ class VanillaPolicyGradientRL:
                 step_size=8,
                 learning_rate=(learning_rate, learning_rate * 50),
                 const_lr_decay=.5,
-                max_lr_decay=.7,
-                mode='exp_rate'
+                max_lr_decay=.7
             )
             train_op = tf.train.AdamOptimizer(
                 learning_rate=lr
@@ -294,7 +275,7 @@ if __name__ == '__main__':
     parser.add_argument('--epochs', type=int, default=10)
     parser.add_argument('--epoch_episodes', type=int, default=100)
     parser.add_argument('--epoch_steps', type=int, default=1000)
-    parser.add_argument('--lr', type=float, default=1e-2)
+    parser.add_argument('--lr', type=float, default=1e-3)
     parser.add_argument('--render', action='store_true')
     args = parser.parse_args()
 

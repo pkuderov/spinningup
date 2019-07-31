@@ -32,5 +32,5 @@ class ExperimentResult:
 class CyclicLearningRateConfig:
     step_size: int = 10
     learning_rate: Tuple[float, float] = (1e-3, 5e-2)
-    const_lr_decay: float = .5,
+    const_lr_decay: float = .5
     max_lr_decay: float = .7
