@@ -9,12 +9,13 @@ from spinup.utils.experiment import ExperimentResult
 def get_runner_po_value_func_baseline(arguments) -> ExperimentResult:
     from spinup.my_algos.simple_pg.pg_03_baselines_value_func import VanillaPolicyGradientRL
 
-    return VanillaPolicyGradientRL(arguments.env_name, debug=arguments.debug).run_train(
+    return VanillaPolicyGradientRL(arguments.env_name, _debug=arguments.debug, unlock_env=True).run_train(
         hidden_layers=(32,),
         epochs=arguments.epochs,
         epoch_episodes=arguments.epoch_episodes,
-        episode_steps=arguments.epoch_steps,
+        episode_steps=arguments.episode_steps,
         learning_rate=arguments.lr,
+        gamma=arguments.gamma,
         render=arguments.render,
         print_scores=not arguments.no_print
     )
@@ -39,9 +40,10 @@ if __name__ == '__main__':
     parser.add_argument('--debug', action='store_true')
     parser.add_argument('--experiments', type=int, default=10)
     parser.add_argument('--epochs', type=int, default=100)
-    parser.add_argument('--epoch_episodes', type=int, default=10)
-    parser.add_argument('--epoch_steps', type=int, default=2000)
+    parser.add_argument('--epoch_episodes', type=int, default=100)
+    parser.add_argument('--episode_steps', type=int, default=200)
     parser.add_argument('--lr', type=float, default=1e-3)
+    parser.add_argument('--gamma', type=float, default=.99)
     parser.add_argument('--render', action='store_true')
     parser.add_argument('--no-print', action='store_true', default=True)
     parser.add_argument('--save-to', type=str, default='./out/last.csv')

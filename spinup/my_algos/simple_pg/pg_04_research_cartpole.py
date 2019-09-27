@@ -7,6 +7,7 @@ from tensorflow.python.keras import Input
 from tensorflow.python.keras.layers import Dense
 
 from spinup.utils.clr import cyclic_learning_rate as clr
+from spinup.utils.experiment import ExperimentResult, ExperimentInfo, EpochResult
 from spinup.utils.my_utils import managed_gym_environment
 
 
@@ -146,17 +147,22 @@ class VanillaPolicyGradientRL:
                 action = np.random.randint(self._n_actions)
             return action
 
+        def close_sessions(self):
+            self._session.close()
+
         def _sample_another_action(self, action):
             a = np.random.randint(self._n_actions - 1)
             return a if a < action else a + 1
 
     class _Sampler:
-        def __init__(self, env, n_episodes, max_total_steps, render: bool = True):
+        def __init__(self, env, n_episodes, episode_steps, gamma, render: bool = True):
             self._env = env
             self._n_episodes = n_episodes
-            self._max_total_steps = max_total_steps
+            self._episode_steps = episode_steps
+            self._gamma = gamma
             self._render = render
 
+            max_total_steps = episode_steps * n_episodes
             self._actions = np.empty(shape=(max_total_steps,), dtype=np.int32)
             self._rewards = np.empty(shape=(max_total_steps,), dtype=np.float32)
             self._current_rewards = np.empty(shape=(max_total_steps,), dtype=np.float32)
@@ -171,7 +177,7 @@ class VanillaPolicyGradientRL:
             step, episode, done, ep_step = 0, 0, False, 0
             observation = self._env.reset()
 
-            while step < self._max_total_steps and episode < self._n_episodes:
+            while episode < self._n_episodes:
                 if episode == 0 and self._render:
                     self._env.render()
 
@@ -185,7 +191,7 @@ class VanillaPolicyGradientRL:
 
                 ep_step += 1
                 step += 1
-                if done or ep_step >= 500:
+                if done or ep_step >= self._episode_steps:
                     observation = self._env.reset()
                     score = self._current_rewards[:ep_step].sum()
                     self._rewards[(step - ep_step):step] = self._reward_to_go(
@@ -196,11 +202,6 @@ class VanillaPolicyGradientRL:
 
                     episode += 1
                     ep_step = 0
-                    if (
-                            step > .95 * self._max_total_steps
-                            or step + ep_step > .99 * self._max_total_steps
-                    ):
-                        break
 
             observations = self._observations[:step - ep_step]
             actions = self._actions[:step - ep_step]
@@ -211,21 +212,29 @@ class VanillaPolicyGradientRL:
             return observations, actions, rewards, episode_scores, episode_lengths
 
         def _reward_to_go(self, rewards):
-            return np.cumsum(rewards[::-1])[::-1]
+            result = rewards.copy()
+            for i in range(result.shape[0] - 2, -1, -1):
+                result[i] += self._gamma * result[i+1]
+            return result
 
-    def __init__(self, env_name: str, debug: bool = False):
+    def __init__(self, env_name: str, _debug: bool = False, unlock_env: bool = False):
         self.env_name = env_name
-        self.debug = debug
+        self.debug = _debug
+        self.unlock_env = unlock_env
 
     def run_train(
             self,
             hidden_layers: Tuple[int], epochs: int,
-            epoch_episodes: int, epoch_steps: int,
-            learning_rate: float, render: bool
-    ) -> None:
-        with managed_gym_environment(self.env_name, self.debug) as env:
+            epoch_episodes: int, episode_steps: int,
+            learning_rate: float, gamma: float,
+            render: bool, print_scores: bool
+    ) -> ExperimentResult:
+        with managed_gym_environment(self.env_name, self.debug, self.unlock_env) as env:
             observation_shape = env.observation_space.shape
             n_actions = env.action_space.n
+
+            experiment_info = ExperimentInfo(env=self.env_name, epochs=epochs, hidden_layers=hidden_layers)
+            experiment_result = ExperimentResult(experiment_info)
 
             model = self._Model(
                 observation_shape, n_actions,
@@ -236,7 +245,8 @@ class VanillaPolicyGradientRL:
             sampler = self._Sampler(
                 env=env,
                 n_episodes=epoch_episodes,
-                max_total_steps=epoch_steps,
+                episode_steps=episode_steps,
+                gamma=gamma,
                 render=render
             )
             for epoch in range(epochs):
@@ -257,12 +267,19 @@ class VanillaPolicyGradientRL:
 
                 mean_score = episode_scores.mean()
                 mean_length = episode_lengths.mean()
-                print('[{0}]: loss: {1:.3f}  sc: {2:.3f}  len: {3:.3f}  t: {4:.4f}  lr:{5:.4f}  vfl: {6:.3f}'.format(
-                    epoch, loss, mean_score, mean_length, dt, lr, vf_loss
-                ))
 
+                if print_scores:
+                    print('[{0}]: loss: {1:.3f}  sc: {2:.3f}  len: {3:.3f}  t: {4:.4f}  lr:{5:.4f}  vfl: {6:.3f}'.format(
+                        epoch, loss, mean_score, mean_length, dt, lr, vf_loss
+                    ))
+
+                epoch_result = EpochResult(epoch=epoch, loss=loss, score=mean_score)
+                experiment_result.epochs.append(epoch_result)
+
+            model.close_sessions()
             if render:
                 input()
+            return experiment_result
 
 
 if __name__ == '__main__':
@@ -273,20 +290,24 @@ if __name__ == '__main__':
     parser.add_argument('--debug', action='store_true')
     parser.add_argument('--epochs', type=int, default=10)
     parser.add_argument('--epoch_episodes', type=int, default=100)
-    parser.add_argument('--epoch_steps', type=int, default=1000)
+    parser.add_argument('--episode_steps', type=int, default=200)
     parser.add_argument('--lr', type=float, default=1e-3)
+    parser.add_argument('--gamma', type=float, default=.99)
     parser.add_argument('--render', action='store_true')
+    parser.add_argument('--no-print', action='store_true')
     args = parser.parse_args()
 
-    debug = args.debug
-    if not debug:
+    _debug = args.debug
+    if not _debug:
         print('\nUsing simplest formulation of policy gradient.\n')
 
-    VanillaPolicyGradientRL(args.env_name, debug=debug).run_train(
+    result = VanillaPolicyGradientRL(args.env_name, _debug=_debug, unlock_env=True).run_train(
         hidden_layers=(32,),
         epochs=args.epochs,
         epoch_episodes=args.epoch_episodes,
-        epoch_steps=args.epoch_steps,
+        episode_steps=args.episode_steps,
         learning_rate=args.lr,
-        render=args.render
+        gamma=args.gamma,
+        render=args.render,
+        print_scores=not args.no_print
     )
