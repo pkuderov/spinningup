@@ -5,8 +5,10 @@ from gym.spaces import Box, Discrete
 
 
 @contextmanager
-def managed_gym_environment(env_name: str, debug: bool):
+def managed_gym_environment(env_name: str, debug: bool, unlock: bool):
     env = gym.make(env_name)
+    if unlock:
+        env = env.env
     if debug:
         print('===> Env')
 

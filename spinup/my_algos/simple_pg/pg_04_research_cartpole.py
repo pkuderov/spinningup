@@ -95,7 +95,7 @@ class VanillaPolicyGradientRL:
         def _get_optimizer(learning_rate: float, global_step: tf.Variable, loss: tf.Tensor):
             lr = clr(
                 global_step=global_step,
-                step_size=8,
+                step_size=10,
                 learning_rate=(learning_rate, learning_rate * 50),
                 const_lr_decay=.5,
                 max_lr_decay=.7
@@ -185,7 +185,7 @@ class VanillaPolicyGradientRL:
 
                 ep_step += 1
                 step += 1
-                if done or abs(observation[0]) > .4 or abs(observation[2]) > .06:
+                if done or ep_step >= 500:
                     observation = self._env.reset()
                     score = self._current_rewards[:ep_step].sum()
                     self._rewards[(step - ep_step):step] = self._reward_to_go(
@@ -203,7 +203,6 @@ class VanillaPolicyGradientRL:
                         break
 
             observations = self._observations[:step - ep_step]
-            # observations[:, 0:1] = 0.
             actions = self._actions[:step - ep_step]
             rewards = self._rewards[:step - ep_step]
             episode_scores = self._episode_scores[:episode]

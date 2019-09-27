@@ -13,7 +13,7 @@ def get_runner_po_value_func_baseline(arguments) -> ExperimentResult:
         hidden_layers=(32,),
         epochs=arguments.epochs,
         epoch_episodes=arguments.epoch_episodes,
-        epoch_steps=arguments.epoch_steps,
+        episode_steps=arguments.epoch_steps,
         learning_rate=arguments.lr,
         render=arguments.render,
         print_scores=not arguments.no_print
