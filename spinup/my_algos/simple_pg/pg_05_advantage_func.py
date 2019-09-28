@@ -5,6 +5,7 @@ import numpy as np
 import tensorflow as tf
 from tensorflow.python.keras import Input
 from tensorflow.python.keras.layers import Dense
+from tensorflow.python.keras.models import Model
 
 from spinup.utils.clr import cyclic_learning_rate as clr
 from spinup.utils.experiment import ExperimentResult, ExperimentInfo, EpochResult
@@ -16,7 +17,9 @@ class VanillaPolicyGradientRL:
         def __init__(
                 self, observation_shape: Tuple[int, ...], n_actions: int,
                 hidden_layers: Tuple[int, ...],
-                learning_rate: float = 1e-2, stochasticity: float = .1
+                learning_rate: float = 1e-2,
+                gamma: float = .99,
+                stochasticity: float = .1
         ):
             self._n_actions = n_actions
             self._stochasticity = stochasticity
@@ -24,22 +27,37 @@ class VanillaPolicyGradientRL:
             # reset default graph
             tf.reset_default_graph()
 
-            # Policy approximate
-            self._observation = Input(shape=observation_shape, dtype=tf.float32)
-            logits, self._actions = self._get_policy_approx(n_actions, hidden_layers, self._observation)
+            # define inputs
+            self._state = tf.placeholder(shape=(None,) + observation_shape, dtype=tf.float32)
+            self._action = tf.placeholder(shape=(None,), dtype=tf.int32)
+            self._reward = tf.placeholder(shape=(None,), dtype=tf.float32)
+            self._total_reward = tf.placeholder(shape=(None,), dtype=tf.float32)
+            self._n_state = tf.placeholder(shape=(None,) + observation_shape, dtype=tf.float32)
 
-            # Value-function approximate
-            self._value_func_pred = self._get_value_func_approx(hidden_layers, self._observation)
+            # shared hidden part of NN
+            input_layer, hidden_nn = self._get_hidden_layers(observation_shape, hidden_layers)
+            input_layer2, hidden_nn2 = self._get_hidden_layers(observation_shape, hidden_layers)
+
+            # Policy(s) and V(s) approximates
+            policy = self._approximate_policy(input_layer, hidden_nn, n_actions)
+            V = self._approximate_value(input_layer, hidden_nn)
+
+            # Value prediction
+            s, a, r, ns, tot_r = self._state, self._action, self._reward, self._n_state, self._total_reward
+            pred_n_v = V(ns)
+            pred_v = V(s)
+            Qsa = r + gamma * pred_n_v
+
+            # Policy sampling for action prediction
+            logits = policy(s)
+            self._pred_action = self._sample_action(logits)
 
             # Policy loss
-            self._actions_phi = tf.placeholder(shape=(None,), dtype=tf.int32)
-            self._rewards_phi = tf.placeholder(shape=(None,), dtype=tf.float32)
-            self._policy_loss = self._get_policy_loss(
-                n_actions, self._rewards_phi, self._actions_phi, logits, self._value_func_pred
-            )
+            A = tot_r - pred_v
+            self._policy_loss = self._get_policy_loss(n_actions, A, self._action, logits)
 
             # Value-function loss
-            self._value_func_loss = self._get_value_func_loss(self._rewards_phi, self._value_func_pred)
+            self._value_func_loss = self._get_value_func_loss(pred_v, Qsa)
 
             # Policy learning rate and optimizer
             self._policy_global_step = tf.Variable(0, trainable=False)
@@ -50,47 +68,47 @@ class VanillaPolicyGradientRL:
             # Value-function learning rate and optimizer
             self._value_func_global_step = tf.Variable(0, trainable=False)
             self._value_func_learning_rate, self._value_func_train_op = self._get_optimizer(
-                learning_rate * 4, self._value_func_global_step, self._value_func_loss
+                learning_rate, self._value_func_global_step, self._value_func_loss
             )
 
             self._session = tf.InteractiveSession()
             self._session.run(tf.global_variables_initializer())
 
         @staticmethod
-        def _get_policy_approx(
-                n_actions: int, hidden_layers: Tuple[int, ...], observation: tf.Variable
-        ):
-            x = observation
-            for hidden_layer in hidden_layers:
-                x = Dense(hidden_layer, activation=tf.nn.relu)(x)
-            logits = Dense(n_actions)(x)
-            actions = tf.squeeze(tf.random.categorical(logits=logits, num_samples=1), axis=1)
-            return logits, actions
+        def _approximate_policy(input_layer, hidden_nn, n_actions: int):
+            output_layer = Dense(n_actions)(hidden_nn)
+            return Model(input_layer, output_layer)
 
         @staticmethod
-        def _get_value_func_approx(hidden_layers: Tuple[int, ...], observation: tf.Variable):
-            x = observation
-            for hidden_layer in hidden_layers:
-                x = Dense(hidden_layer, activation=tf.nn.relu)(x)
-            value_pred = tf.squeeze(Dense(1)(x), axis=1)
-            return value_pred
+        def _approximate_value(input_layer, hidden_nn):
+            output_layer = tf.squeeze(Dense(1)(hidden_nn), axis=1)
+            return Model(input_layer, output_layer)
 
         @staticmethod
-        def _get_value_func_loss(rewards_phi: tf.Variable, value_pred: tf.Variable):
-            loss = tf.losses.mean_squared_error(rewards_phi, value_pred)
-            return loss
+        def _sample_action(logits):
+            return tf.squeeze(tf.random.categorical(logits=logits, num_samples=1), axis=1)
+
+        @staticmethod
+        def _get_value_func_loss(pred_v, target_Qsa):
+            return tf.losses.mean_squared_error(pred_v, tf.stop_gradient(target_Qsa))
 
         @staticmethod
         def _get_policy_loss(
-                n_actions: int, rewards_phi: tf.Variable, actions_phi: tf.Variable, logits: tf.Tensor,
-                baseline: tf.Tensor
+                n_actions: int, advantage: tf.Tensor, action: tf.Variable, logits: tf.Tensor
         ):
-            actions_mask = tf.one_hot(actions_phi, n_actions)
+            action_one_hot = tf.one_hot(action, n_actions)
             log_probs = tf.nn.log_softmax(logits)
-            likelihood = tf.reduce_sum(actions_mask * log_probs, axis=1)
-            rewards = rewards_phi - baseline
-            loss = -tf.reduce_mean(likelihood * rewards)
+            log_prob = tf.reduce_sum(action_one_hot * log_probs, axis=1)
+            loss = -tf.reduce_mean(log_prob * tf.stop_gradient(advantage))
             return loss
+
+        @staticmethod
+        def _get_hidden_layers(observation_shape: Tuple[int, ...], hidden_layers: Tuple[int, ...]):
+            input_layer = Input(shape=observation_shape, dtype=tf.float32)
+            x = input_layer
+            for hidden_layer in hidden_layers:
+                x = Dense(hidden_layer, activation=tf.nn.relu)(x)
+            return input_layer, x
 
         @staticmethod
         def _get_optimizer(learning_rate: float, global_step: tf.Variable, loss: tf.Tensor):
@@ -108,20 +126,24 @@ class VanillaPolicyGradientRL:
             )
             return lr, train_op
 
-        def train_one_epoch(self, observations, actions, rewards):
+        def train_one_epoch(self, states, actions, rewards, n_states, total_rewards):
             value_func_loss, _, value_func_learning_rate = self._session.run(
                 [self._value_func_loss, self._value_func_train_op, self._value_func_learning_rate],
                 feed_dict={
-                    self._observation: observations,
-                    self._rewards_phi: rewards,
+                    self._state: states,
+                    self._reward: rewards,
+                    self._n_state: n_states,
+                    self._total_reward: total_rewards
                 }
             )
             policy_loss, _, policy_learning_rate = self._session.run(
                 [self._policy_loss, self._policy_train_op, self._policy_learning_rate,],
                 feed_dict={
-                    self._observation: observations,
-                    self._actions_phi: actions,
-                    self._rewards_phi: rewards,
+                    self._state: states,
+                    self._action: actions,
+                    self._reward: rewards,
+                    self._n_state: n_states,
+                    self._total_reward: total_rewards
                 }
             )
             return policy_loss, policy_learning_rate, value_func_loss, value_func_learning_rate
@@ -130,16 +152,16 @@ class VanillaPolicyGradientRL:
             loss = self._session.run(
                 self._policy_loss,
                 feed_dict={
-                    self._observation: observations,
-                    self._actions_phi: actions,
-                    self._rewards_phi: rewards,
+                    self._state: observations,
+                    self._action: actions,
+                    self._reward: rewards,
                 }
             )
             return loss
 
         def predict_action(self, observations):
-            actions_batch = self._session.run(self._actions, {
-                self._observation: observations.reshape(1, -1)
+            actions_batch = self._session.run(self._pred_action, {
+                self._state: observations.reshape(1, -1)
             })
             action = actions_batch[0]
             if np.random.rand() < self._stochasticity:
@@ -165,51 +187,58 @@ class VanillaPolicyGradientRL:
             max_total_steps = episode_steps * n_episodes
             self._actions = np.empty(shape=(max_total_steps,), dtype=np.int32)
             self._rewards = np.empty(shape=(max_total_steps,), dtype=np.float32)
+            self._total_rewards = np.empty(shape=(max_total_steps,), dtype=np.float32)
             self._current_rewards = np.empty(shape=(max_total_steps,), dtype=np.float32)
             self._episode_scores = np.empty(shape=(n_episodes,), dtype=np.float32)
             self._episode_lengths = np.empty(shape=(n_episodes,), dtype=np.int32)
 
             observation = self._env.reset()
             observations_shape = (max_total_steps,) + observation.shape
-            self._observations = np.empty(shape=observations_shape, dtype=np.float32)
+            self._states = np.empty(shape=observations_shape, dtype=np.float32)
+            self._n_states = np.empty_like(self._states)
 
         def get_one_epoch_samples(self, model: 'VanillaPolicyGradientRL._Model'):
             step, episode, done, ep_step = 0, 0, False, 0
-            observation = self._env.reset()
+            state = self._env.reset()
 
             while episode < self._n_episodes:
                 if episode == 0 and self._render:
                     self._env.render()
 
-                self._observations[step] = observation.copy()
+                self._states[step] = state.copy()
 
-                action = model.predict_action(observation)
+                action = model.predict_action(state)
                 self._actions[step] = action
 
-                observation, reward, done, _ = self._env.step(action)
+                state, reward, done, _ = self._env.step(action)
                 self._current_rewards[ep_step] = reward
+                self._rewards[step] = reward
 
                 ep_step += 1
                 step += 1
                 if done or ep_step >= self._episode_steps:
-                    observation = self._env.reset()
                     score = self._current_rewards[:ep_step].sum()
-                    self._rewards[(step - ep_step):step] = self._reward_to_go(
+                    self._total_rewards[(step - ep_step):step] = self._reward_to_go(
                         self._current_rewards[:ep_step]
                     )
                     self._episode_scores[episode] = score
                     self._episode_lengths[episode] = ep_step
+                    self._n_states[(step - ep_step):(step - 1)] = self._states[(step - ep_step + 1):step]
+                    self._n_states[step - 1] = state
 
                     episode += 1
                     ep_step = 0
+                    state = self._env.reset()
 
-            observations = self._observations[:step - ep_step]
-            actions = self._actions[:step - ep_step]
-            rewards = self._rewards[:step - ep_step]
+            states = self._states[:step]
+            actions = self._actions[:step]
+            rewards = self._rewards[:step]
+            total_rewards = self._total_rewards[:step]
+            n_states = self._n_states[:step]
             episode_scores = self._episode_scores[:episode]
             episode_lengths = self._episode_lengths[:episode]
 
-            return observations, actions, rewards, episode_scores, episode_lengths
+            return states, actions, rewards, n_states, total_rewards, episode_scores, episode_lengths
 
         def _reward_to_go(self, rewards):
             result = rewards.copy()
@@ -240,6 +269,7 @@ class VanillaPolicyGradientRL:
                 observation_shape, n_actions,
                 hidden_layers=hidden_layers,
                 learning_rate=learning_rate,
+                gamma=gamma,
                 stochasticity=.0
             )
             sampler = self._Sampler(
@@ -250,18 +280,21 @@ class VanillaPolicyGradientRL:
                 render=render
             )
             for epoch in range(epochs):
-                observations, actions, rewards, episode_scores, episode_lengths = sampler.get_one_epoch_samples(model)
+                states, actions, rewards, n_states, total_rewards, episode_scores, episode_lengths = \
+                        sampler.get_one_epoch_samples(model)
 
                 if episode_scores.shape[0] == 0:
                     continue
 
                 t = timer()
                 loss, lr, vf_loss, vf_lr = model.train_one_epoch(
-                    observations=observations,
+                    states=states,
                     actions=actions,
-                    rewards=rewards
+                    rewards=rewards,
+                    n_states=n_states,
+                    total_rewards=total_rewards
                 )
-                dt = 1e7 * (timer() - t) / observations.shape[0]
+                dt = 1e7 * (timer() - t) / states.shape[0]
 
                 model._stochasticity *= .0
 
@@ -302,7 +335,7 @@ if __name__ == '__main__':
         print('\nUsing simplest formulation of policy gradient.\n')
 
     result = VanillaPolicyGradientRL(args.env_name, _debug=_debug, unlock_env=True).run_train(
-        hidden_layers=(32,),
+        hidden_layers=(32, ),
         epochs=args.epochs,
         epoch_episodes=args.epoch_episodes,
         episode_steps=args.episode_steps,
